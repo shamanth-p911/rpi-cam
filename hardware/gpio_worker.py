@@ -11,6 +11,8 @@ class GPIOWorker(QObject):
         self.ROTARY_PIN_A = 17 
         self.ROTARY_PIN_B = 27
         self.BUTTON_PIN = 22
+        self.encoder = None
+        self.shutter_btn = None
 
     def monitor_pins(self):
         try:
@@ -22,6 +24,7 @@ class GPIOWorker(QObject):
             self.encoder.when_rotated_counter_clockwise = lambda: self.rotated_counter_clockwise.emit()
             self.shutter_btn.when_pressed = lambda: self.button_pressed.emit()
             
+            print("[GPIO] Hardware listeners hooked successfully via gpiozero.")
             while self.running:
                 QThread.msleep(100)
                 
@@ -30,5 +33,15 @@ class GPIOWorker(QObject):
             while self.running:
                 QThread.msleep(500)
 
+        self._cleanup()
+
     def stop(self):
         self.running = False
+
+    def _cleanup(self):
+        try:
+            if self.encoder: self.encoder.close()
+            if self.shutter_btn: self.shutter_btn.close()
+            print("[GPIO] Pins freed cleanly.")
+        except Exception:
+            pass

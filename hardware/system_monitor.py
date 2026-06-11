@@ -9,21 +9,23 @@ class SystemMonitorWorker(QObject):
         self.running = True
 
     def start_monitoring(self):
+        print("[MONITOR] Telemetry loop initialized.")
         while self.running:
             storage_pct = 0.0
             try:
                 total, used, free = shutil.disk_usage("/")
-                storage_pct = (used / total) * 100
+                storage_pct = (used / total) * 100.0
             except Exception:
                 pass
 
-            battery_pct = 95.0 # Mock reading placeholder value
-
+            battery_pct = 95.0 
             self.status_updated.emit(battery_pct, storage_pct)
             
             for _ in range(50):
                 if not self.running: break
                 QThread.msleep(100)
+
+        print("[MONITOR] Telemetry engine shut down cleanly.")
 
     def stop(self):
         self.running = False

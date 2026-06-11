@@ -2,63 +2,85 @@ import sys
 import os
 import time
 import cv2
+import glob  # <--- NEW: Required for finding the newest file
 
-# Explicitly appends the project root path so internal modules import smoothly
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from PyQt6.QtWidgets import QApplication, QMainWindow
-from PyQt6.QtCore import QThread, pyqtSlot, Qt, QTimer
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton
+from PyQt6.QtCore import QThread, pyqtSlot, pyqtSignal, Qt, QTimer, QUrl
+from PyQt6.QtGui import QImage, QPixmap, QShortcut, QKeySequence, QDesktopServices
 
-# Internal Layer Components Imports
 from ui.main_view import MainView
 from hardware.camera_worker import CameraWorker
 from hardware.gpio_worker import GPIOWorker
 from hardware.system_monitor import SystemMonitorWorker
 
+print("[SYSTEM] Booting up Arducam Dashboard...")
+
 class RpiCameraApp(QMainWindow):
+    request_high_res_capture = pyqtSignal(str)
+    request_video_start = pyqtSignal(str)
+    request_video_stop = pyqtSignal()
+
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("RPi Native Camera")
+        self.setWindowTitle("RPi Arducam 64MP Dashboard")
         self.setMinimumSize(800, 480) 
         
-        # Target folder for saving captured media safely
         self.output_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "captures")
         if not os.path.exists(self.output_folder):
             os.makedirs(self.output_folder)
-            print(f"[SYSTEM] Created storage directory at: {self.output_folder}")
+            print(f"[SYSTEM] Created storage folder layout at: {self.output_folder}")
         
-        # Core State Flags & Variables
         self.latest_raw_frame = None
         self.is_recording = False
-        self.video_writer = None
         self.recording_seconds = 0
         
-        # Instantiate layout configuration view
         self.main_view = MainView(self)
         self.setCentralWidget(self.main_view)
         
         self.current_mode = "Manual"
         self.main_view.update_mode_text(self.current_mode)
         
-        # Setup GUI Software Recording Stopwatch Timer
         self.recording_timer = QTimer(self)
         self.recording_timer.timeout.connect(self.update_recording_stopwatch)
         
-        # Initialize and Start Hardware Threads
+        self.quit_shortcut = QShortcut(QKeySequence("Esc"), self)
+        self.quit_shortcut.activated.connect(self.close)
+        
         self.init_hardware_threads()
         self.connect_ui_signals()
 
+        # Floating Gallery Button
+        self.gallery_btn = QPushButton("🖼️", self.main_view)
+        self.gallery_btn.setGeometry(20, 380, 60, 60) 
+        self.gallery_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #222222; 
+                color: white; 
+                font-size: 24px; 
+                border-radius: 30px; 
+                border: 2px solid #555555;
+            }
+            QPushButton:pressed {
+                background-color: #555555;
+            }
+        """)
+        self.gallery_btn.clicked.connect(self.open_gallery)
+
     def init_hardware_threads(self):
-        # 1. Camera Live Video Processing Pipeline Thread
         self.camera_thread = QThread(self)
         self.camera_worker = CameraWorker()
         self.camera_worker.moveToThread(self.camera_thread)
         self.camera_thread.started.connect(self.camera_worker.start_stream)
+        
         self.camera_worker.frame_ready.connect(self.update_video_feed)
+        self.camera_worker.high_res_saved_notification.connect(self.handle_capture_finished)
+        self.request_high_res_capture.connect(self.camera_worker.capture_maximum_resolution_still)
+        self.request_video_start.connect(self.camera_worker.start_video_recording)
+        self.request_video_stop.connect(self.camera_worker.stop_video_recording)
         self.camera_thread.start()
 
-        # 2. GPIO Interfacing Thread
         self.gpio_thread = QThread(self)
         self.gpio_worker = GPIOWorker()
         self.gpio_worker.moveToThread(self.gpio_thread)
@@ -68,7 +90,6 @@ class RpiCameraApp(QMainWindow):
         self.gpio_worker.button_pressed.connect(self.handle_hardware_capture)
         self.gpio_thread.start()
 
-        # 3. System Diagnostic Telemetry Thread
         self.sys_thread = QThread(self)
         self.sys_worker = SystemMonitorWorker()
         self.sys_worker.moveToThread(self.sys_thread)
@@ -85,11 +106,6 @@ class RpiCameraApp(QMainWindow):
     def update_video_feed(self, rgb_frame):
         if rgb_frame is not None and not self.main_view.feed_label.size().isEmpty():
             self.latest_raw_frame = rgb_frame.copy()
-            
-            # If video recording toggle is active, append live frames into our media writer pipeline
-            if self.is_recording and self.video_writer is not None:
-                bgr_frame = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
-                self.video_writer.write(bgr_frame)
             
             h, w, ch = rgb_frame.shape
             bytes_per_line = ch * w
@@ -112,55 +128,46 @@ class RpiCameraApp(QMainWindow):
     def capture_media(self, media_type):
         if media_type == "photo":
             if self.latest_raw_frame is not None:
+                self.main_view.update_mode_text("Capturing 64MP... Please wait.")
+                QApplication.processEvents() 
+                
                 timestamp = time.strftime("%Y%m%d_%H%M%S")
-                filename = f"IMG_{timestamp}.jpg"
+                filename = f"IMG_64MP_{timestamp}.jpg"
                 filepath = os.path.join(self.output_folder, filename)
-                bgr_frame = cv2.cvtColor(self.latest_raw_frame, cv2.COLOR_RGB2BGR)
-                cv2.imwrite(filepath, bgr_frame)
-                print(f"[CAPTURE] Photo saved: captures/{filename}")
+                self.request_high_res_capture.emit(filepath)
         
         elif media_type == "video":
             if not self.is_recording:
-                # --- START RECORDING SEQUENCE ---
-                if self.latest_raw_frame is None:
-                    print("[WARNING] Cannot record video; camera feed initialization pending.")
-                    return
-                
                 self.is_recording = True
                 self.recording_seconds = 0
                 
-                # Configure filenames using precise timestamps
                 timestamp = time.strftime("%Y%m%d_%H%M%S")
                 filename = f"VID_{timestamp}.avi"
                 filepath = os.path.join(self.output_folder, filename)
                 
-                # Instantiate standard compression codecs targeting Pi 5 architecture frames (640x480 at 30 FPS)
-                fourcc = cv2.VideoWriter_fourcc(*'XVID')
-                self.video_writer = cv2.VideoWriter(filepath, fourcc, 30.0, (640, 480))
+                self.request_video_start.emit(filepath)
                 
-                # UI feedback changes
                 self.main_view.timer_label.setText("REC 00:00:00")
                 self.main_view.timer_label.show()
                 self.main_view.video_btn.setStyleSheet("background-color: #990000; border-radius: 20px; border: 4px solid #FFFFFF;")
-                self.recording_timer.start(1000) # Tick every 1 second
-                print(f"[VIDEO] Started recording audio-visual sequence: captures/{filename}")
+                self.recording_timer.start(1000)
             else:
-                # --- STOP RECORDING SEQUENCE ---
                 self.is_recording = False
                 self.recording_timer.stop()
                 
-                if self.video_writer is not None:
-                    self.video_writer.release()
-                    self.video_writer = None
+                self.request_video_stop.emit()
                 
-                # Reset graphical interface assets
                 self.main_view.timer_label.hide()
                 self.main_view.video_btn.setStyleSheet("background-color: #FF0000; border-radius: 20px; border: 2px solid #FFFFFF;")
-                print("[VIDEO] Recording stopped cleanly and file committed to storage disk.")
+                print("[UI Action] Video recording mode toggled off.")
+
+    @pyqtSlot(str)
+    def handle_capture_finished(self, saved_path):
+        self.main_view.update_mode_text(self.current_mode)
+        print(f"[SUCCESS] High-fidelity 14MB capture saved safely to: {saved_path}")
 
     def update_recording_stopwatch(self):
         self.recording_seconds += 1
-        # Convert seconds integer into structured format layouts (Hours:Minutes:Seconds)
         hours = self.recording_seconds // 3600
         minutes = (self.recording_seconds % 3600) // 60
         seconds = self.recording_seconds % 60
@@ -175,28 +182,50 @@ class RpiCameraApp(QMainWindow):
         self.main_view.update_mode_text(self.current_mode)
         self.main_view.mode_menu.hide()
 
-    def closeEvent(self, event):
-        # Prevent file corruptions if application window drops during an open capture routine
-        if self.is_recording and self.video_writer is not None:
-            self.video_writer.release()
+    def open_gallery(self):
+        print("[UI] Searching for the latest capture...")
+        
+        # Search the captures folder for any files
+        search_path = os.path.join(self.output_folder, "*")
+        list_of_files = glob.glob(search_path)
+        
+        if list_of_files:
+            # Find the file with the most recent modification timestamp
+            latest_file = max(list_of_files, key=os.path.getmtime)
+            print(f"[UI] Opening newest file: {latest_file}")
             
-        print("Stopping hardware workers...")
+            # Open that specific file in the OS default viewer
+            file_url = QUrl.fromLocalFile(latest_file)
+            QDesktopServices.openUrl(file_url)
+        else:
+            # Fallback: If the folder is empty, just open the folder itself
+            print("[UI] Folder is empty. Opening directory instead...")
+            folder_url = QUrl.fromLocalFile(self.output_folder)
+            QDesktopServices.openUrl(folder_url)
+
+    def closeEvent(self, event):
+        print("[SYSTEM] Initiating hardware worker shutdown sequence...")
+        
+        if self.is_recording:
+            self.camera_worker.stop_video_recording()
+            
         self.camera_worker.stop()
-        self.gpio_worker.stop()
-        self.sys_worker.stop()
+        self.gpio_worker.running = False
+        self.sys_worker.running = False
+        
+        import os
+        os.system("pkill -9 -f rpicam-vid")
+        os.system("pkill -9 -f rpicam-jpeg")
         
         self.camera_thread.quit()
         self.gpio_thread.quit()
         self.sys_thread.quit()
         
-        self.camera_thread.wait()
-        self.gpio_thread.wait()
-        self.sys_thread.wait()
-        print("All background routines stopped safely.")
-        super().closeEvent(event)
+        print("[SYSTEM] Core engine interface shutdown complete.")
+        event.accept()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = RpiCameraApp()
-    window.showFullScreen() 
+    window.showMaximized() 
     sys.exit(app.exec())
