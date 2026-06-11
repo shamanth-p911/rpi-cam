@@ -125,10 +125,8 @@ class CameraWorker(QObject):
                 self.proc.terminate()
                 self.proc.wait(timeout=1.0)
             except Exception:
-                try: 
-                    self.proc.kill()
-                except Exception: 
-                    pass
+                try: self.proc.kill()
+                except Exception: pass
             self.proc = None
 
     def stop(self):
