@@ -10,7 +10,7 @@ class GPIOWorker(QObject):
         self.running = True
         self.ROTARY_PIN_A = 17 
         self.ROTARY_PIN_B = 27
-        self.BUTTON_PIN = 22 # Mapped to Physical Pin 15
+        self.BUTTON_PIN = 22
         self.encoder = None
         self.shutter_btn = None
 

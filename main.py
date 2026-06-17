@@ -7,13 +7,14 @@ import glob
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton
-from PyQt6.QtCore import QThread, pyqtSlot, pyqtSignal, Qt, QTimer, QUrl
-from PyQt6.QtGui import QImage, QPixmap, QShortcut, QKeySequence, QDesktopServices
+from PyQt6.QtCore import QThread, pyqtSlot, pyqtSignal, Qt, QTimer
+from PyQt6.QtGui import QImage, QPixmap, QShortcut, QKeySequence
 
 from ui.main_view import MainView
 from hardware.camera_worker import CameraWorker
 from hardware.gpio_worker import GPIOWorker
 from hardware.system_monitor import SystemMonitorWorker
+from ui.gallery_view import GalleryView
 
 print("[SYSTEM] Booting up Arducam Dashboard...")
 
@@ -24,7 +25,7 @@ class RpiCameraApp(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("RPi Arducam 64MP Dashboard")
+        self.setWindowTitle("RPi Camera Module 3 Dashboard")
         self.setMinimumSize(800, 480) 
         
         self.output_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "captures")
@@ -36,7 +37,6 @@ class RpiCameraApp(QMainWindow):
         self.is_recording = False
         self.recording_seconds = 0
         
-        # Default hardware button mode
         self.active_hardware_mode = "photo" 
         
         self.main_view = MainView(self)
@@ -54,19 +54,8 @@ class RpiCameraApp(QMainWindow):
         self.init_hardware_threads()
         self.connect_ui_signals()
 
-        # Floating Gallery Button
-        self.gallery_btn = QPushButton("🖼️", self.main_view)
-        self.gallery_btn.setGeometry(20, 380, 60, 60) 
-        self.gallery_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #222222; color: white; font-size: 24px; 
-                border-radius: 30px; border: 2px solid #555555;
-            }
-            QPushButton:pressed { background-color: #555555; }
-        """)
-        self.gallery_btn.clicked.connect(self.open_gallery)
-
     def init_hardware_threads(self):
+        # --- Camera ---
         self.camera_thread = QThread(self)
         self.camera_worker = CameraWorker()
         self.camera_worker.moveToThread(self.camera_thread)
@@ -79,18 +68,17 @@ class RpiCameraApp(QMainWindow):
         self.request_video_stop.connect(self.camera_worker.stop_video_recording)
         self.camera_thread.start()
 
+        # --- GPIO ---
         self.gpio_thread = QThread(self)
         self.gpio_worker = GPIOWorker()
         self.gpio_worker.moveToThread(self.gpio_thread)
         self.gpio_thread.started.connect(self.gpio_worker.monitor_pins)
         self.gpio_worker.rotated_clockwise.connect(self.main_view.navigate_menu_down)
         self.gpio_worker.rotated_counter_clockwise.connect(self.main_view.navigate_menu_up)
-        
-        # Hardware shutter button routing
         self.gpio_worker.button_pressed.connect(self.handle_hardware_capture)
-        
         self.gpio_thread.start()
 
+        # --- System Monitor ---
         self.sys_thread = QThread(self)
         self.sys_worker = SystemMonitorWorker()
         self.sys_worker.moveToThread(self.sys_thread)
@@ -99,14 +87,13 @@ class RpiCameraApp(QMainWindow):
         self.sys_thread.start()
 
     def connect_ui_signals(self):
-        # UI Tap Overrides
         self.main_view.camera_btn.clicked.connect(lambda: self.capture_media("photo"))
         self.main_view.video_btn.clicked.connect(lambda: self.capture_media("video"))
-        
-        # Virtual Toggle Switch Animation Hook
         self.main_view.mode_switch_btn.clicked.connect(self.toggle_hardware_mode)
-        
         self.main_view.mode_menu.itemClicked.connect(self.handle_mode_change)
+        self.main_view.zoom_changed.connect(self.camera_worker.set_zoom)
+        # Connect the integrated gallery button
+        self.main_view.gallery_btn.clicked.connect(self.open_gallery)
 
     @pyqtSlot(object)
     def update_video_feed(self, rgb_frame):
@@ -124,10 +111,6 @@ class RpiCameraApp(QMainWindow):
             )
             self.main_view.feed_label.setPixmap(scaled_pixmap)
 
-    @pyqtSlot(float, float)
-    def update_system_status(self, battery_pct, storage_pct):
-        self.main_view.update_system_status(battery_pct, storage_pct)
-
     def toggle_hardware_mode(self):
         if self.active_hardware_mode == "photo":
             self.active_hardware_mode = "video"
@@ -135,7 +118,6 @@ class RpiCameraApp(QMainWindow):
         else:
             self.active_hardware_mode = "photo"
             print("[UI] Hardware button armed for PHOTO capture.")
-            
         self.main_view.update_control_sizes(self.active_hardware_mode)
 
     def handle_hardware_capture(self):
@@ -144,11 +126,13 @@ class RpiCameraApp(QMainWindow):
     def capture_media(self, media_type):
         if media_type == "photo":
             if self.latest_raw_frame is not None:
-                self.main_view.update_mode_text("Capturing 64MP... Please wait.")
+                self.main_view.trigger_flash()
+                
+                self.main_view.update_mode_text("Capturing 12MP... Please wait.")
                 QApplication.processEvents() 
                 
                 timestamp = time.strftime("%Y%m%d_%H%M%S")
-                filename = f"IMG_64MP_{timestamp}.jpg"
+                filename = f"IMG_12MP_{timestamp}.jpg"
                 filepath = os.path.join(self.output_folder, filename)
                 self.request_high_res_capture.emit(filepath)
         
@@ -158,24 +142,22 @@ class RpiCameraApp(QMainWindow):
                 self.recording_seconds = 0
                 
                 timestamp = time.strftime("%Y%m%d_%H%M%S")
-                filename = f"VID_{timestamp}.avi"
+                filename = f"VID_{timestamp}.mp4"
                 filepath = os.path.join(self.output_folder, filename)
                 
                 self.request_video_start.emit(filepath)
                 
                 self.main_view.timer_label.setText("REC 00:00:00")
                 self.main_view.timer_label.show()
-                # Keep active mode bright while recording
-                self.main_view.video_btn.setStyleSheet("background-color: #FF0000; border-radius: 35px; border: 4px solid #FFFFFF;")
+                self.main_view.video_btn.setStyleSheet(
+                    "background-color: #FF0000; border-radius: 27px; border: 4px solid #FFFFFF;"
+                )
                 self.recording_timer.start(1000)
             else:
                 self.is_recording = False
                 self.recording_timer.stop()
-                
                 self.request_video_stop.emit()
-                
                 self.main_view.timer_label.hide()
-                # Return to normal UI size/color
                 self.main_view.update_control_sizes(self.active_hardware_mode)
                 print("[UI Action] Video recording stopped.")
 
@@ -192,28 +174,21 @@ class RpiCameraApp(QMainWindow):
         self.main_view.timer_label.setText(f"REC {hours:02d}:{minutes:02d}:{seconds:02d}")
 
     def handle_mode_change(self, item):
-        selection = item.text()
-        if "mqtt" in selection:
-            self.current_mode = f"Auto: {selection.replace('-', '')}"
-        elif selection == "-manual":
+        selection = item.text().strip()
+        if "mqtt" in selection.lower():
+            self.current_mode = f"Auto: {selection}"
+        elif "manual" in selection.lower():
             self.current_mode = "Manual"
+        else:
+            self.current_mode = selection
         self.main_view.update_mode_text(self.current_mode)
         self.main_view.mode_menu.hide()
 
     def open_gallery(self):
-        print("[UI] Searching for the latest capture...")
-        search_path = os.path.join(self.output_folder, "*")
-        list_of_files = glob.glob(search_path)
-        
-        if list_of_files:
-            latest_file = max(list_of_files, key=os.path.getmtime)
-            print(f"[UI] Opening newest file: {latest_file}")
-            file_url = QUrl.fromLocalFile(latest_file)
-            QDesktopServices.openUrl(file_url)
-        else:
-            print("[UI] Folder is empty. Opening directory instead...")
-            folder_url = QUrl.fromLocalFile(self.output_folder)
-            QDesktopServices.openUrl(folder_url)
+        print("[UI] Opening gallery...")
+        gallery = GalleryView(self.output_folder, parent=self)
+        gallery.load_images()
+        gallery.exec()
 
     def closeEvent(self, event):
         print("[SYSTEM] Initiating hardware worker shutdown sequence...")
@@ -222,7 +197,6 @@ class RpiCameraApp(QMainWindow):
         self.camera_worker.stop()
         self.gpio_worker.running = False
         self.sys_worker.running = False
-        import os
         os.system("pkill -9 -f rpicam-vid")
         os.system("pkill -9 -f rpicam-jpeg")
         self.camera_thread.quit()
