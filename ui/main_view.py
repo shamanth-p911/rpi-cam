@@ -10,10 +10,10 @@ class MqttSettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Network Profile Settings")
-        self.setFixedSize(400, 420) # Slightly taller to comfortably fit the delete button
+        self.setFixedSize(400, 420) 
         self.setStyleSheet("background-color: #1A1A1A; color: #FFFFFF; font-size: 14px;")
         
-        self.delete_requested = False  # Track if user clicked Delete
+        self.delete_requested = False  
         
         layout = QVBoxLayout(self)
         form_layout = QFormLayout()
@@ -42,7 +42,6 @@ class MqttSettingsDialog(QDialog):
         
         layout.addLayout(form_layout)
         
-        # Add Delete Button (Hidden during creation, shown during editing)
         self.delete_btn = QPushButton("🗑️ Delete Profile")
         self.delete_btn.setStyleSheet("""
             QPushButton { background-color: #551111; color: white; padding: 6px; border-radius: 4px; font-weight: bold; }
@@ -73,8 +72,6 @@ class MqttSettingsDialog(QDialog):
         
         if is_editing:
             self.delete_btn.show()
-            # Disable changing the profile identity name to avoid sync issues if desired, 
-            # or keep it enabled if you handle renames. Let's allow renames by storing the original.
             self.original_name = config.get("network_name", "")
 
     def handle_delete(self):
@@ -121,7 +118,14 @@ class MainView(QWidget):
         root.addWidget(self._build_hud_center(), stretch=1)
 
         self.mode_icon_btn.clicked.connect(self.toggle_mode_menu)
-        self.settings_btn.clicked.connect(self.toggle_settings_menu)
+        
+        # Instantiate the slider programmatically to keep the camera zoom pipeline intact
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.zoom_slider.setMinimum(10)
+        self.zoom_slider.setMaximum(40)
+        self.zoom_slider.setValue(10)
+        self.zoom_slider.valueChanged.connect(self._on_zoom_changed)
+        
         self.update_control_sizes("photo")
 
     def _build_top_bar(self):
@@ -157,18 +161,6 @@ class MainView(QWidget):
         self.mqtt_status_indicator.setStyleSheet("color: #555555; background: transparent;")
         self.mqtt_status_indicator.setToolTip("MQTT Offline")
         bar.addWidget(self.mqtt_status_indicator)
-
-        self.settings_btn = QPushButton("⚙")
-        self.settings_btn.setFixedSize(32, 32)
-        self.settings_btn.setFont(QFont("Arial", 16))
-        self.settings_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #111111; border: 1px solid #2A2A2A;
-                color: #666666; border-radius: 16px;
-            }
-            QPushButton:pressed { color: #FFFFFF; background-color: #1A1A1A; }
-        """)
-        bar.addWidget(self.settings_btn)
         return bar
 
     def update_mqtt_status(self, text, color):
@@ -229,18 +221,6 @@ class MainView(QWidget):
         mm_layout.setContentsMargins(0, 0, 20, 0)
         mm_layout.addWidget(self.mode_menu)
         self.hud_layout.addWidget(mode_menu_wrapper, 0, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-
-        self.settings_panel = self._build_settings_panel()
-        self._shadow(self.settings_panel)
-        self.settings_panel.setFixedWidth(300)
-        self.settings_panel.hide()
-        
-        sp_wrapper = QWidget()
-        sp_wrapper.setStyleSheet("background: transparent;")
-        sp_layout = QHBoxLayout(sp_wrapper)
-        sp_layout.setContentsMargins(0, 0, 20, 0)
-        sp_layout.addWidget(self.settings_panel)
-        self.hud_layout.addWidget(sp_wrapper, 0, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         bottom_hud_container = QWidget()
         bottom_hud_container.setStyleSheet("background: transparent;")
@@ -321,94 +301,10 @@ class MainView(QWidget):
         self.hud_layout.addWidget(bottom_hud_container, 0, 0, Qt.AlignmentFlag.AlignBottom)
         return self.hud_container
 
-    def _build_settings_panel(self):
-        panel = QFrame()
-        panel.setStyleSheet("""
-            QFrame { background-color: rgba(13, 13, 13, 220); border: 1px solid #333; border-radius: 12px; }
-        """)
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(12)
-
-        title = QLabel("SETTINGS")
-        title.setFont(QFont("Arial", 9, QFont.Weight.Bold))
-        title.setStyleSheet("color: #888888; letter-spacing: 3px; border: none; background: transparent;")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title)
-        layout.addWidget(self._hline())
-
-        hdr = QHBoxLayout()
-        icon_lbl = QLabel("⊕")
-        icon_lbl.setStyleSheet("color: #26D0CE; font-size: 15px; border: none; background: transparent;")
-        section_lbl = QLabel("ZOOM")
-        section_lbl.setFont(QFont("Arial", 9, QFont.Weight.Bold))
-        section_lbl.setStyleSheet("color: #AAAAAA; letter-spacing: 2px; border: none; background: transparent;")
-        hdr.addWidget(icon_lbl)
-        hdr.addWidget(section_lbl)
-        hdr.addStretch()
-
-        self.zoom_value_label = QLabel("1.0×")
-        self.zoom_value_label.setFont(QFont("Consolas", 14, QFont.Weight.Bold))
-        self.zoom_value_label.setStyleSheet("color: #26D0CE; border: none; background: transparent;")
-        hdr.addWidget(self.zoom_value_label)
-        layout.addLayout(hdr)
-
-        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
-        self.zoom_slider.setMinimum(10)
-        self.zoom_slider.setMaximum(40)
-        self.zoom_slider.setValue(10)
-        self.zoom_slider.setFixedHeight(36)
-        self.zoom_slider.setStyleSheet("""
-            QSlider::groove:horizontal { height: 4px; background: #333333; border-radius: 2px; }
-            QSlider::sub-page:horizontal {
-                background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #1A2980, stop:1 #26D0CE);
-                border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
-                background: #FFFFFF; border: 2px solid #26D0CE;
-                width: 18px; height: 18px; margin: -8px 0; border-radius: 9px;
-            }
-            QSlider::handle:horizontal:pressed { background: #26D0CE; }
-        """)
-        self.zoom_slider.valueChanged.connect(self._on_zoom_changed)
-        layout.addWidget(self.zoom_slider)
-
-        foot = QHBoxLayout()
-        lbl1x = QLabel("1×")
-        lbl1x.setStyleSheet("color: #888888; font-size: 10px; border: none; background: transparent;")
-        lbl4x = QLabel("4×")
-        lbl4x.setStyleSheet("color: #888888; font-size: 10px; border: none; background: transparent;")
-
-        reset_btn = QPushButton("Reset")
-        reset_btn.setFixedHeight(24)
-        reset_btn.setStyleSheet("""
-            QPushButton { background-color: transparent; color: #AAAAAA; border: 1px solid #444444; border-radius: 5px; font-size: 10px; padding: 0 10px; }
-            QPushButton:pressed { color: #FFFFFF; border-color: #777777; }
-        """)
-        reset_btn.clicked.connect(lambda: self.zoom_slider.setValue(10))
-        foot.addWidget(lbl1x)
-        foot.addStretch()
-        foot.addWidget(reset_btn)
-        foot.addStretch()
-        foot.addWidget(lbl4x)
-        layout.addLayout(foot)
-        layout.addWidget(self._hline())
-
-        for row_label in ["Exposure", "Shutter Speed"]:
-            row = QHBoxLayout()
-            lbl = QLabel(row_label)
-            lbl.setFont(QFont("Arial", 10))
-            lbl.setStyleSheet("color: #DDDDDD; border: none; background: transparent;")
-            soon = QLabel("soon")
-            soon.setFont(QFont("Arial", 9))
-            soon.setStyleSheet("color: #777777; border: 1px solid #555555; border-radius: 4px; padding: 1px 6px; background: transparent;")
-            row.addWidget(lbl)
-            row.addStretch()
-            row.addWidget(soon)
-            layout.addLayout(row)
-
-        layout.addStretch()
-        return panel
+    def adjust_camera_zoom(self, step):
+        current_val = self.zoom_slider.value()
+        new_val = max(self.zoom_slider.minimum(), min(self.zoom_slider.maximum(), current_val + step))
+        self.zoom_slider.setValue(new_val)
 
     def rebuild_network_menu(self):
         self.mode_menu.clear()
@@ -421,12 +317,10 @@ class MainView(QWidget):
         dialog = MqttSettingsDialog(self)
         
         if target_profile_name:
-            # Editing mode
             profile_data = next((p for p in self.mqtt_config.get("profiles", []) if p["network_name"] == target_profile_name), None)
             if profile_data:
                 dialog.load_config(profile_data, is_editing=True)
         else:
-            # Creative mode
             blank_config = {
                 "network_name": "", "enabled": True, "broker": "", "port": 1883,
                 "topic": "camera/commands", "username": "", "password": "", "client_id": ""
@@ -437,14 +331,12 @@ class MainView(QWidget):
             profiles = self.mqtt_config.get("profiles", [])
             
             if dialog.delete_requested and target_profile_name:
-                # Remove profile from dataset
                 profiles = [p for p in profiles if p["network_name"] != target_profile_name]
                 self.mqtt_config["profiles"] = profiles
                 self.mqtt_config["active_profile"] = "Manual"
             else:
                 new_profile = dialog.get_config()
                 if new_profile["network_name"]:
-                    # Clean original profile tracking structure out if identity name changed
                     if target_profile_name:
                         profiles = [p for p in profiles if p["network_name"] != target_profile_name]
                     else:
@@ -527,7 +419,6 @@ class MainView(QWidget):
 
     def _on_zoom_changed(self, value):
         zoom = value / 10.0
-        self.zoom_value_label.setText(f"{zoom:.1f}×")
         if zoom > 1.0:
             self.zoom_badge.setText(f"{zoom:.1f}×")
             self.zoom_badge.show()
@@ -536,12 +427,7 @@ class MainView(QWidget):
         self.zoom_changed.emit(zoom)
 
     def toggle_mode_menu(self):
-        self.settings_panel.hide()
         self.mode_menu.setVisible(not self.mode_menu.isVisible())
-
-    def toggle_settings_menu(self):
-        self.mode_menu.hide()
-        self.settings_panel.setVisible(not self.settings_panel.isVisible())
 
     def update_mode_text(self, text):
         self.mode_status_label.setText(text.upper())
@@ -582,21 +468,6 @@ class MainView(QWidget):
             
             self.video_btn.setFixedSize(54, 54)
             self.video_btn.setStyleSheet("background-color: #EE0022; border-radius: 27px; border: 4px solid #FFFFFF;")
-
-    def navigate_menu_up(self):
-        if self.mode_menu.isVisible():
-            r = self.mode_menu.currentRow()
-            self.mode_menu.setCurrentRow(max(0, r - 1))
-
-    def navigate_menu_down(self):
-        if self.mode_menu.isVisible():
-            r = self.mode_menu.currentRow()
-            self.mode_menu.setCurrentRow(min(self.mode_menu.count() - 1, r + 1))
-
-    def get_active_menu(self):
-        if self.mode_menu.isVisible():
-            return self.mode_menu
-        return None
 
     def trigger_flash(self):
         self.flash_overlay = QWidget(self.feed_label)

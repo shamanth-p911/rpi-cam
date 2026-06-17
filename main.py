@@ -42,11 +42,11 @@ class RpiCameraApp(QMainWindow):
         self.recording_seconds = 0
         
         self.active_hardware_mode = "photo" 
+        self.active_gallery_instance = None  
         
         self.main_view = MainView(self)
         self.setCentralWidget(self.main_view)
         
-        # Load profile configuration safely
         loaded_config = self.load_mqtt_config()
         self.current_mode = loaded_config.get("active_profile", "Manual")
         
@@ -64,7 +64,6 @@ class RpiCameraApp(QMainWindow):
         self.init_hardware_threads()
         self.connect_ui_signals()
         
-        # Apply current active workspace configurations directly to thread logic
         self.apply_active_profile_to_worker(loaded_config)
 
     def load_mqtt_config(self):
@@ -72,7 +71,6 @@ class RpiCameraApp(QMainWindow):
             try:
                 with open(self.config_path, 'r') as f:
                     data = json.load(f)
-                    # Migration Strategy from old single-profile format
                     if "broker" in data:
                         migrated = {
                             "active_profile": "DefaultProfile" if data.get("enabled") else "Manual",
@@ -101,7 +99,6 @@ class RpiCameraApp(QMainWindow):
                 json.dump(config_dict, f, indent=4)
             self.apply_active_profile_to_worker(config_dict)
             
-            # Ensure the top-bar UI mode descriptive label displays the right configuration
             self.current_mode = config_dict.get("active_profile", "Manual")
             if self.current_mode != "Manual":
                 self.main_view.update_mode_text(f"Auto: {self.current_mode}")
@@ -142,8 +139,9 @@ class RpiCameraApp(QMainWindow):
         self.gpio_worker = GPIOWorker()
         self.gpio_worker.moveToThread(self.gpio_thread)
         self.gpio_thread.started.connect(self.gpio_worker.monitor_pins)
-        self.gpio_worker.rotated_clockwise.connect(self.main_view.navigate_menu_down)
-        self.gpio_worker.rotated_counter_clockwise.connect(self.main_view.navigate_menu_up)
+        
+        self.gpio_worker.rotated_clockwise.connect(self.handle_encoder_clockwise)
+        self.gpio_worker.rotated_counter_clockwise.connect(self.handle_encoder_counter_clockwise)
         self.gpio_worker.button_pressed.connect(self.handle_hardware_capture)
         self.gpio_thread.start()
 
@@ -182,6 +180,20 @@ class RpiCameraApp(QMainWindow):
         self.main_view.set_initial_mqtt_config(self.load_mqtt_config())
 
     @pyqtSlot()
+    def handle_encoder_clockwise(self):
+        if self.active_gallery_instance and self.active_gallery_instance.isVisible():
+            self.active_gallery_instance.set_gallery_zoom("in")
+        else:
+            self.main_view.adjust_camera_zoom(1)
+
+    @pyqtSlot()
+    def handle_encoder_counter_clockwise(self):
+        if self.active_gallery_instance and self.active_gallery_instance.isVisible():
+            self.active_gallery_instance.set_gallery_zoom("out")
+        else:
+            self.main_view.adjust_camera_zoom(-1)
+
+    @pyqtSlot()
     def handle_mqtt_photo(self):
         print("[MQTT] Photo command received. Executing capture.")
         self.capture_media("photo")
@@ -191,16 +203,12 @@ class RpiCameraApp(QMainWindow):
         if not self.is_recording:
             print("[MQTT] Video start command received. Executing record.")
             self.capture_media("video")
-        else:
-            print("[MQTT] Video start ignored (already recording).")
 
     @pyqtSlot()
     def handle_mqtt_video_stop(self):
         if self.is_recording:
             print("[MQTT] Video stop command received. Stopping record.")
             self.capture_media("video")
-        else:
-            print("[MQTT] Video stop ignored (not recording).")
 
     @pyqtSlot(object)
     def update_video_feed(self, rgb_frame):
@@ -228,7 +236,10 @@ class RpiCameraApp(QMainWindow):
         self.main_view.update_control_sizes(self.active_hardware_mode)
 
     def handle_hardware_capture(self):
-        self.capture_media(self.active_hardware_mode)
+        if self.active_gallery_instance and self.active_gallery_instance.isVisible():
+            self.active_gallery_instance.handle_button_press()
+        else:
+            self.capture_media(self.active_hardware_mode)
 
     def capture_media(self, media_type):
         if media_type == "photo":
@@ -298,15 +309,15 @@ class RpiCameraApp(QMainWindow):
             self.save_mqtt_config(config)
             self.main_view.mode_menu.hide()
         else:
-            # When an existing profile topic entry is clicked, trigger the layout dialog box loaded with its parameters
             self.main_view.mode_menu.hide()
             self.main_view.open_mqtt_dialog(target_profile_name=selection)
 
     def open_gallery(self):
         print("[UI] Opening gallery...")
-        gallery = GalleryView(self.output_folder, parent=self)
-        gallery.load_images()
-        gallery.exec()
+        self.active_gallery_instance = GalleryView(self.output_folder, parent=self)
+        self.active_gallery_instance.load_images()
+        self.active_gallery_instance.exec()
+        self.active_gallery_instance = None  
 
     def closeEvent(self, event):
         print("[SYSTEM] Initiating hardware worker shutdown sequence...")

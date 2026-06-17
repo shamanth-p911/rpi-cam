@@ -1,5 +1,5 @@
 {
-    "active_profile": "Manual",
+    "active_profile": "cobso",
     "profiles": [
         {
             "network_name": "DefaultProfile",
@@ -10,6 +10,16 @@
             "username": "eette",
             "password": "etettee",
             "client_id": "rpicam_client"
+        },
+        {
+            "network_name": "cobso",
+            "enabled": true,
+            "broker": "",
+            "port": 1883,
+            "topic": "camera/comman",
+            "username": "",
+            "password": "",
+            "client_id": ""
         }
     ]
 }
