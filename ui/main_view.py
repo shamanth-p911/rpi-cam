@@ -1,31 +1,123 @@
 from PyQt6.QtWidgets import (QWidget, QLabel, QHBoxLayout, QVBoxLayout,
                              QPushButton, QListWidget, QProgressBar,
                              QGraphicsDropShadowEffect, QSlider, QFrame,
-                             QGraphicsOpacityEffect, QGridLayout)
+                             QGraphicsOpacityEffect, QGridLayout, QDialog,
+                             QLineEdit, QCheckBox, QFormLayout, QDialogButtonBox)
 from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation
 from PyQt6.QtGui import QFont, QColor
 
+class MqttSettingsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Network Profile Settings")
+        self.setFixedSize(400, 420) # Slightly taller to comfortably fit the delete button
+        self.setStyleSheet("background-color: #1A1A1A; color: #FFFFFF; font-size: 14px;")
+        
+        self.delete_requested = False  # Track if user clicked Delete
+        
+        layout = QVBoxLayout(self)
+        form_layout = QFormLayout()
+        
+        self.name_input = QLineEdit()
+        self.enabled_chk = QCheckBox("Enable MQTT Remote Access")
+        self.broker_input = QLineEdit()
+        self.port_input = QLineEdit()
+        self.topic_input = QLineEdit()
+        self.user_input = QLineEdit()
+        self.pass_input = QLineEdit()
+        self.pass_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.client_id_input = QLineEdit()
+        
+        for widget in [self.name_input, self.broker_input, self.port_input, self.topic_input, self.user_input, self.pass_input, self.client_id_input]:
+            widget.setStyleSheet("background-color: #0D0D0D; border: 1px solid #333; padding: 5px; border-radius: 4px; color: #FFFFFF;")
+        
+        form_layout.addRow("Network Name:", self.name_input)
+        form_layout.addRow(self.enabled_chk)
+        form_layout.addRow("Broker IP/Host:", self.broker_input)
+        form_layout.addRow("Port:", self.port_input)
+        form_layout.addRow("Subscribe Topic:", self.topic_input)
+        form_layout.addRow("Username (opt):", self.user_input)
+        form_layout.addRow("Password (opt):", self.pass_input)
+        form_layout.addRow("Client ID:", self.client_id_input)
+        
+        layout.addLayout(form_layout)
+        
+        # Add Delete Button (Hidden during creation, shown during editing)
+        self.delete_btn = QPushButton("🗑️ Delete Profile")
+        self.delete_btn.setStyleSheet("""
+            QPushButton { background-color: #551111; color: white; padding: 6px; border-radius: 4px; font-weight: bold; }
+            QPushButton:hover { background-color: #AA2222; }
+        """)
+        self.delete_btn.clicked.connect(self.handle_delete)
+        self.delete_btn.hide()
+        layout.addWidget(self.delete_btn)
+        
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        self.buttons.setStyleSheet("""
+            QPushButton { background-color: #2A2A2A; padding: 6px 15px; border-radius: 4px; color: white; }
+            QPushButton:hover { background-color: #444; }
+        """)
+        layout.addWidget(self.buttons)
+
+    def load_config(self, config, is_editing=False):
+        self.name_input.setText(config.get("network_name", ""))
+        self.enabled_chk.setChecked(config.get("enabled", True))
+        self.broker_input.setText(config.get("broker", ""))
+        self.port_input.setText(str(config.get("port", 1883)))
+        self.topic_input.setText(config.get("topic", "camera/commands"))
+        self.user_input.setText(config.get("username", ""))
+        self.pass_input.setText(config.get("password", ""))
+        self.client_id_input.setText(config.get("client_id", "rpicam_client"))
+        
+        if is_editing:
+            self.delete_btn.show()
+            # Disable changing the profile identity name to avoid sync issues if desired, 
+            # or keep it enabled if you handle renames. Let's allow renames by storing the original.
+            self.original_name = config.get("network_name", "")
+
+    def handle_delete(self):
+        self.delete_requested = True
+        self.accept()
+
+    def get_config(self):
+        return {
+            "network_name": self.name_input.text().strip(),
+            "enabled": self.enabled_chk.isChecked(),
+            "broker": self.broker_input.text().strip(),
+            "port": int(self.port_input.text().strip() or 1883),
+            "topic": self.topic_input.text().strip(),
+            "username": self.user_input.text().strip(),
+            "password": self.pass_input.text().strip(),
+            "client_id": self.client_id_input.text().strip()
+        }
+
+
 class MainView(QWidget):
     zoom_changed = pyqtSignal(float)
+    request_mqtt_save = pyqtSignal(dict) 
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.current_storage_free = 100.0
+        self.mqtt_config = {"active_profile": "Manual", "profiles": []}
         self.init_ui()
 
+    def set_initial_mqtt_config(self, config):
+        self.mqtt_config = config
+        self.rebuild_network_menu()
+        
     def init_ui(self):
         self.setStyleSheet(
             "background-color: #050505; color: #FFFFFF;"
             "font-family: 'Segoe UI', Arial, sans-serif;"
         )
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 8, 0, 0) # Removed bottom margin so feed hits the bottom edge
+        root.setContentsMargins(0, 8, 0, 0) 
         root.setSpacing(0)
 
-        # 1. Top Bar (Remains anchored at the top)
         root.addLayout(self._build_top_bar())
-        
-        # 2. The HUD Layout (Camera Feed + Overlapping Controls)
         root.addWidget(self._build_hud_center(), stretch=1)
 
         self.mode_icon_btn.clicked.connect(self.toggle_mode_menu)
@@ -60,6 +152,12 @@ class MainView(QWidget):
         """)
         bar.addWidget(self.mode_status_label, stretch=1, alignment=Qt.AlignmentFlag.AlignCenter)
 
+        self.mqtt_status_indicator = QLabel("●")
+        self.mqtt_status_indicator.setFont(QFont("Arial", 14))
+        self.mqtt_status_indicator.setStyleSheet("color: #555555; background: transparent;")
+        self.mqtt_status_indicator.setToolTip("MQTT Offline")
+        bar.addWidget(self.mqtt_status_indicator)
+
         self.settings_btn = QPushButton("⚙")
         self.settings_btn.setFixedSize(32, 32)
         self.settings_btn.setFont(QFont("Arial", 16))
@@ -73,29 +171,24 @@ class MainView(QWidget):
         bar.addWidget(self.settings_btn)
         return bar
 
+    def update_mqtt_status(self, text, color):
+        self.mqtt_status_indicator.setStyleSheet(f"color: {color}; background: transparent;")
+        self.mqtt_status_indicator.setToolTip(f"MQTT Status: {text}")
+
     def _build_hud_center(self):
-        """Creates a Grid Layout where all elements overlap on row 0, col 0"""
         self.hud_container = QWidget()
         self.hud_layout = QGridLayout(self.hud_container)
         self.hud_layout.setContentsMargins(0, 0, 0, 0)
 
-        # ==========================================
-        # LAYER 0: The Camera Feed (Background)
-        # ==========================================
         self.feed_label = QLabel("Initializing 12MP Sensor…")
         self.feed_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.feed_label.setFont(QFont("Arial", 11))
-        # Feed gets no alignment flag, forcing it to stretch and fill the entire area
         self.feed_label.setStyleSheet("background-color: #000000; color: #444444;")
         self.hud_layout.addWidget(self.feed_label, 0, 0)
 
-        # ==========================================
-        # LAYER 1: Top Indicators (Timer & Zoom)
-        # ==========================================
         top_hud_container = QWidget()
         top_hud_container.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         top_hud_container.setStyleSheet("background: transparent;")
-        
         top_hud = QHBoxLayout(top_hud_container)
         top_hud.setContentsMargins(20, 20, 20, 20)
 
@@ -124,17 +217,12 @@ class MainView(QWidget):
 
         self.hud_layout.addWidget(top_hud_container, 0, 0, Qt.AlignmentFlag.AlignTop)
 
-        # ==========================================
-        # LAYER 2: Floating Menus (Right Aligned)
-        # ==========================================
         self.mode_menu = QListWidget()
-        self.mode_menu.addItems(["  MQTT Auto 1", "  MQTT Auto 2", "  MQTT Auto 3", "  + Add Network", "  Manual Control"])
         self._style_list(self.mode_menu)
         self._shadow(self.mode_menu)
         self.mode_menu.setFixedWidth(220)
         self.mode_menu.hide()
         
-        # Add right-margin via a container
         mode_menu_wrapper = QWidget()
         mode_menu_wrapper.setStyleSheet("background: transparent;")
         mm_layout = QHBoxLayout(mode_menu_wrapper)
@@ -154,15 +242,11 @@ class MainView(QWidget):
         sp_layout.addWidget(self.settings_panel)
         self.hud_layout.addWidget(sp_wrapper, 0, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-        # ==========================================
-        # LAYER 3: Bottom Controls
-        # ==========================================
         bottom_hud_container = QWidget()
         bottom_hud_container.setStyleSheet("background: transparent;")
         bottom_hud_layout = QHBoxLayout(bottom_hud_container)
-        bottom_hud_layout.setContentsMargins(15, 10, 15, 20) # Floating margin above screen bottom
+        bottom_hud_layout.setContentsMargins(15, 10, 15, 20) 
 
-        # Gallery Button
         self.gallery_btn = QPushButton("🖼️")
         self.gallery_btn.setFixedSize(50, 50) 
         self.gallery_btn.setStyleSheet("""
@@ -175,11 +259,9 @@ class MainView(QWidget):
         bottom_hud_layout.addWidget(self.gallery_btn)
         bottom_hud_layout.addStretch(1)
 
-        # Telemetry Block
         bottom_hud_layout.addWidget(self._telemetry_block("PWR", "battery", "#00b09b", "#96c93d"))
         bottom_hud_layout.addStretch(2)
 
-        # Shutter Controls
         shutter_controls = QHBoxLayout()
         shutter_controls.setSpacing(12)
         shutter_controls.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -209,7 +291,6 @@ class MainView(QWidget):
         bottom_hud_layout.addLayout(shutter_controls)
         bottom_hud_layout.addStretch(3)
 
-        # Info Button 
         info_layout = QHBoxLayout()
         info_layout.setAlignment(Qt.AlignmentFlag.AlignRight)
         
@@ -237,9 +318,7 @@ class MainView(QWidget):
         info_layout.addWidget(self.info_btn)
         
         bottom_hud_layout.addLayout(info_layout)
-
         self.hud_layout.addWidget(bottom_hud_container, 0, 0, Qt.AlignmentFlag.AlignBottom)
-
         return self.hud_container
 
     def _build_settings_panel(self):
@@ -315,7 +394,7 @@ class MainView(QWidget):
         layout.addLayout(foot)
         layout.addWidget(self._hline())
 
-        for row_label in ["Exposure", "Shutter Speed", "Focus Peaking"]:
+        for row_label in ["Exposure", "Shutter Speed"]:
             row = QHBoxLayout()
             lbl = QLabel(row_label)
             lbl.setFont(QFont("Arial", 10))
@@ -331,8 +410,54 @@ class MainView(QWidget):
         layout.addStretch()
         return panel
 
+    def rebuild_network_menu(self):
+        self.mode_menu.clear()
+        self.mode_menu.addItem("  Manual Control")
+        for p in self.mqtt_config.get("profiles", []):
+            self.mode_menu.addItem(f"  {p['network_name']}")
+        self.mode_menu.addItem("  + Add Network")
+
+    def open_mqtt_dialog(self, target_profile_name=None):
+        dialog = MqttSettingsDialog(self)
+        
+        if target_profile_name:
+            # Editing mode
+            profile_data = next((p for p in self.mqtt_config.get("profiles", []) if p["network_name"] == target_profile_name), None)
+            if profile_data:
+                dialog.load_config(profile_data, is_editing=True)
+        else:
+            # Creative mode
+            blank_config = {
+                "network_name": "", "enabled": True, "broker": "", "port": 1883,
+                "topic": "camera/commands", "username": "", "password": "", "client_id": ""
+            }
+            dialog.load_config(blank_config, is_editing=False)
+            
+        if dialog.exec():
+            profiles = self.mqtt_config.get("profiles", [])
+            
+            if dialog.delete_requested and target_profile_name:
+                # Remove profile from dataset
+                profiles = [p for p in profiles if p["network_name"] != target_profile_name]
+                self.mqtt_config["profiles"] = profiles
+                self.mqtt_config["active_profile"] = "Manual"
+            else:
+                new_profile = dialog.get_config()
+                if new_profile["network_name"]:
+                    # Clean original profile tracking structure out if identity name changed
+                    if target_profile_name:
+                        profiles = [p for p in profiles if p["network_name"] != target_profile_name]
+                    else:
+                        profiles = [p for p in profiles if p["network_name"] != new_profile["network_name"]]
+                        
+                    profiles.append(new_profile)
+                    self.mqtt_config["profiles"] = profiles
+                    self.mqtt_config["active_profile"] = new_profile["network_name"]
+            
+            self.request_mqtt_save.emit(self.mqtt_config)
+            self.rebuild_network_menu()
+
     def _telemetry_block(self, title, attr_prefix, c1, c2):
-        # Wrapped in a semi-transparent background so it's readable against the video
         container = QWidget()
         container.setStyleSheet("background-color: rgba(10, 10, 10, 180); border-radius: 8px; padding: 4px;")
         col = QVBoxLayout(container)

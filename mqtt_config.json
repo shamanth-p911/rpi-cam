@@ -1,0 +1,15 @@
+{
+    "active_profile": "Manual",
+    "profiles": [
+        {
+            "network_name": "DefaultProfile",
+            "enabled": false,
+            "broker": "ttt",
+            "port": 1883,
+            "topic": "camera/commands",
+            "username": "eette",
+            "password": "etettee",
+            "client_id": "rpicam_client"
+        }
+    ]
+}
