@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=RPi Pro Camera
+Comment=Native PyQt6 Desktop Camera Interface
+Exec=/home/admincam/Desktop/rpi-cam/env/bin/python3 /home/admincam/Desktop/rpi-cam/main.py
+Path=/home/admincam/Desktop/rpi-cam
+Terminal=false
+Categories=Utility;Development;
+StartupNotify=true
