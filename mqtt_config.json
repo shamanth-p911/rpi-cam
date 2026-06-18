@@ -1,5 +1,5 @@
 {
-    "active_profile": "cobso",
+    "active_profile": "vhgj",
     "profiles": [
         {
             "network_name": "DefaultProfile",
@@ -12,13 +12,13 @@
             "client_id": "rpicam_client"
         },
         {
-            "network_name": "cobso",
+            "network_name": "vhgj",
             "enabled": true,
-            "broker": "",
+            "broker": "v cn",
             "port": 1883,
-            "topic": "camera/comman",
+            "topic": "camera/commands",
             "username": "",
-            "password": "",
+            "password": "tjgjg",
             "client_id": ""
         }
     ]
