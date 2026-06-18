@@ -153,11 +153,14 @@ class RpiCameraApp(QMainWindow):
         self.sys_worker.status_updated.connect(self.main_view.update_system_status)
         self.sys_thread.start()
         
-        # --- MQTT Worker ---
+# --- MQTT Worker ---
         self.mqtt_thread = QThread(self)
         self.mqtt_worker = MQTTWorker()
+        self.moveToThread(self.mqtt_thread)  # Moves to worker target
         self.mqtt_worker.moveToThread(self.mqtt_thread)
-        self.mqtt_thread.started.connect(self.mqtt_worker.run_loop)
+        
+        # FIX HERE: Connect directly to start_listening
+        self.mqtt_thread.started.connect(self.mqtt_worker.start_listening)
         
         self.mqtt_worker.photo_requested.connect(self.handle_mqtt_photo)
         self.mqtt_worker.video_start_requested.connect(self.handle_mqtt_video_start)
@@ -169,8 +172,8 @@ class RpiCameraApp(QMainWindow):
         self.mqtt_thread.start()
 
     def connect_ui_signals(self):
-        self.main_view.camera_btn.clicked.connect(lambda: self.capture_media("photo"))
-        self.main_view.video_btn.clicked.connect(lambda: self.capture_media("video"))
+        # Connected to a single action routine that figures out current state
+        self.main_view.shutter_btn.clicked.connect(lambda: self.capture_media(self.active_hardware_mode))
         self.main_view.mode_switch_btn.clicked.connect(self.toggle_hardware_mode)
         self.main_view.mode_menu.itemClicked.connect(self.handle_mode_change)
         self.main_view.zoom_changed.connect(self.camera_worker.set_zoom)
@@ -266,7 +269,7 @@ class RpiCameraApp(QMainWindow):
                 
                 self.main_view.timer_label.setText("REC 00:00:00")
                 self.main_view.timer_label.show()
-                self.main_view.video_btn.setStyleSheet(
+                self.main_view.shutter_btn.setStyleSheet(
                     "background-color: #FF0000; border-radius: 27px; border: 4px solid #FFFFFF;"
                 )
                 self.recording_timer.start(1000)

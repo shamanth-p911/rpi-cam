@@ -1,14 +1,15 @@
 import os
 import glob
+import cv2
 from PyQt6.QtWidgets import QDialog, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame, QWidget
-from PyQt6.QtCore import Qt, QThreadPool, QRunnable, pyqtSlot, pyqtSignal, QObject, QSize
-from PyQt6.QtGui import QPixmap, QFont
+from PyQt6.QtCore import Qt, QThreadPool, QRunnable, pyqtSlot, pyqtSignal, QObject, QSize, QTimer
+from PyQt6.QtGui import QPixmap, QFont, QImage
 
 class CacheWorkerSignals(QObject):
     result_ready = pyqtSignal(str, QPixmap)
 
 class CacheRunnable(QRunnable):
-    """Decodes and scales raw disk files asynchronously to match viewport aspect ratios."""
+    """Decodes raw images or extracts a meaningful frame of a video asynchronously for previews."""
     def __init__(self, filepath, target_size):
         super().__init__()
         self.filepath = filepath
@@ -16,15 +17,67 @@ class CacheRunnable(QRunnable):
         self.signals = CacheWorkerSignals()
 
     def run(self):
-        pixmap = QPixmap(self.filepath)
-        if not pixmap.isNull():
-            # Force absolute proportional downsizing without clipping logic boundaries
-            scaled = pixmap.scaled(
-                self.target_size,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
-            )
-            self.signals.result_ready.emit(self.filepath, scaled)
+        filename = os.path.basename(self.filepath).lower()
+        is_video = filename.endswith(('.mp4', '.avi'))
+
+        if is_video:
+            cap = cv2.VideoCapture(self.filepath)
+            if cap.isOpened():
+                # Attempt to skip past initial black setup frames (target around frame 20)
+                target_frame = 20
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                
+                if total_frames > 0 and target_frame >= total_frames:
+                    target_frame = total_frames // 2
+
+                # Strategy 1: Fast Seek Hardware Pointer
+                cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+                ret, frame = cap.read()
+                
+                # Strategy 2: Fast Sequential Read Fallback if seeking failed or returned blank empty matrix
+                if not ret or frame is None or cv2.countNonZero(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)) == 0:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    for _ in range(target_frame):
+                        ret, img = cap.read()
+                        if ret and img is not None:
+                            frame = img
+                        else:
+                            break
+                
+                cap.release()
+                
+                if frame is not None:
+                    # Convert OpenCV BGR matrix format to RGB array layout
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    h, w, ch = frame.shape
+                    bytes_per_line = ch * w
+                    
+                    q_img = QImage(frame.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+                    pixmap = QPixmap.fromImage(q_img)
+                    
+                    scaled = pixmap.scaled(
+                        self.target_size,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation
+                    )
+                    self.signals.result_ready.emit(self.filepath, scaled)
+                    return
+            
+            # Fallback placeholder if video file is corrupted or unreadable
+            fallback_pix = QPixmap(self.target_size)
+            fallback_pix.fill(Qt.GlobalColor.black)
+            self.signals.result_ready.emit(self.filepath, fallback_pix)
+
+        else:
+            # Regular static image loading context
+            pixmap = QPixmap(self.filepath)
+            if not pixmap.isNull():
+                scaled = pixmap.scaled(
+                    self.target_size,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                self.signals.result_ready.emit(self.filepath, scaled)
 
 class GalleryView(QDialog):
     def __init__(self, capture_folder, parent=None):
@@ -36,10 +89,13 @@ class GalleryView(QDialog):
         self.page_size = 4
         self.is_fullscreen_active = False
         
-        # Centralized image cache map
+        # Video playback infrastructure
+        self.video_cap = None
+        self.video_timer = QTimer(self)
+        self.video_timer.timeout.connect(self.stream_video_frame)
+        
         self.pixmap_cache = {}
         self.thread_pool = QThreadPool.globalInstance()
-        # Restrict concurrent tasks to keep Raspberry Pi core UI cycles completely unthrottled
         self.thread_pool.setMaxThreadCount(2)
 
         self.setWindowTitle("Media Grid Gallery")
@@ -96,7 +152,7 @@ class GalleryView(QDialog):
             lbl = QLabel()
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setStyleSheet("background-color: #0A0A0A; border-radius: 4px;")
-            lbl.setScaledContents(False)  # Lock layout scaling artifacts completely out
+            lbl.setScaledContents(False)  
             frame_layout.addWidget(lbl)
             
             self.grid_layout.addWidget(frame, i // 2, i % 2)
@@ -105,8 +161,7 @@ class GalleryView(QDialog):
         # 2. Immersive View Screen Layout
         self.fullscreen_label = QLabel()
         self.fullscreen_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.fullscreen_label.setStyleSheet("background-color: #000000;")
-        self.fullscreen_label.setScaledContents(False)
+        self.fullscreen_label.setWordWrap(True)
         self.fullscreen_label.hide()
         
         stack_layout.addWidget(self.grid_widget, stretch=1)
@@ -114,7 +169,6 @@ class GalleryView(QDialog):
         outer_layout.addWidget(self.view_stack, stretch=1)
 
     def load_images(self):
-        """Discovers file layout quickly without reading individual file buffers."""
         extensions = ('*.jpg', '*.jpeg', '*.png', '*.mp4', '*.avi')
         self.media_files = []
         for ext in extensions:
@@ -129,30 +183,23 @@ class GalleryView(QDialog):
         self.grid_widget.show()
         self.fullscreen_label.hide()
         
-        # Immediate presentation loop initialization
         self.manage_lazy_cache_loading()
         self.render_view()
 
     def manage_lazy_cache_loading(self):
-        """Loads assets contextually for the visible window space instead of loading the entire directory."""
         if not self.media_files:
             return
             
         current_page = self.global_index // self.page_size
         start_idx = current_page * self.page_size
-        # Cache the current visible page items + the next lookahead page block elements
         end_idx = min(len(self.media_files), start_idx + (self.page_size * 2))
         
-        # Calculate single cell sizing boxes accurately based on screen layout specs
         screen_size = self.parent().size() if self.parent() else QSize(800, 480)
         cell_target_size = QSize(screen_size.width() // 2 - 30, screen_size.height() // 2 - 50)
         
         for idx in range(start_idx, end_idx):
             filepath = self.media_files[idx]
-            filename = os.path.basename(filepath).lower()
-            is_video = filename.endswith(('.mp4', '.avi'))
-            
-            if not is_video and filepath not in self.pixmap_cache:
+            if filepath not in self.pixmap_cache:
                 worker = CacheRunnable(filepath, cell_target_size)
                 worker.signals.result_ready.connect(self.on_cache_item_decoded)
                 self.thread_pool.start(worker)
@@ -185,7 +232,6 @@ class GalleryView(QDialog):
 
         new_page = self.global_index // self.page_size
         if old_page != new_page:
-            # Shift lazy frame loading target blocks as the viewport scrolls
             self.manage_lazy_cache_loading()
 
         self.render_view()
@@ -204,11 +250,16 @@ class GalleryView(QDialog):
             filename = os.path.basename(filepath).lower()
             
             if filename.endswith(('.mp4', '.avi')):
-                self.fullscreen_label.setPixmap(QPixmap())
-                self.fullscreen_label.setText(f"🎬 VIDEO PLAYBACK\n{filename}")
-                self.fullscreen_label.setStyleSheet("color: #EDDE5D; font-size: 18px; font-weight: bold; background: #000000;")
+                self.stop_video_playback()
+                
+                self.video_cap = cv2.VideoCapture(filepath)
+                if self.video_cap.isOpened():
+                    fps = self.video_cap.get(cv2.CAP_PROP_FPS)
+                    interval = int(1000 / fps) if fps > 0 else 33
+                    self.video_timer.start(interval)
+                else:
+                    self.fullscreen_label.setText("⚠️ Failed to load video codec context.")
             else:
-                # Load full-resolution image dynamically for the full-screen inspector view
                 pixmap = QPixmap(filepath)
                 screen_size = self.size()
                 if screen_size.width() <= 10:
@@ -223,10 +274,40 @@ class GalleryView(QDialog):
                 self.fullscreen_label.setStyleSheet("background: #000000;")
         else:
             self.is_fullscreen_active = False
+            self.stop_video_playback()
             self.fullscreen_label.hide()
             self.top_bar.show()
             self.grid_widget.show()
             self.render_view()
+
+    def stream_video_frame(self):
+        if self.video_cap and self.video_cap.isOpened():
+            ret, frame = self.video_cap.read()
+            if ret:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                h, w, ch = frame.shape
+                bytes_per_line = ch * w
+                
+                q_img = QImage(frame.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+                screen_size = self.size()
+                if screen_size.width() <= 10:
+                    screen_size = self.parent().size() if self.parent() else QSize(800, 480)
+                
+                scaled = QPixmap.fromImage(q_img).scaled(
+                    screen_size,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                self.fullscreen_label.setPixmap(scaled)
+            else:
+                self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+    def stop_video_playback(self):
+        self.video_timer.stop()
+        if self.video_cap:
+            self.video_cap.release()
+            self.video_cap = None
+        self.fullscreen_label.clear()
 
     def render_view(self):
         if not self.media_files:
@@ -246,37 +327,47 @@ class GalleryView(QDialog):
             if target_media_idx < len(self.media_files):
                 filepath = self.media_files[target_media_idx]
                 filename = os.path.basename(filepath).lower()
+                is_video = filename.endswith(('.mp4', '.avi'))
                 
-                if filename.endswith(('.mp4', '.avi')):
+                # Clear text placeholders to ensure clean thumbnail rendering
+                lbl.setText("")
+                lbl.setStyleSheet("background-color: #0A0A0A; border-radius: 6px;")
+
+                if filepath in self.pixmap_cache:
+                    lbl.setPixmap(self.pixmap_cache[filepath])
+                else:
                     lbl.setPixmap(QPixmap())
-                    lbl.setText(f"🎬 VIDEO\n{filename[:15]}")
-                    lbl.setStyleSheet("color: #EDDE5D; font-size: 13px; font-weight: bold; background-color: #0A0A0A; border-radius: 6px;")
-                else:
-                    if filepath in self.pixmap_cache:
-                        lbl.setPixmap(self.pixmap_cache[filepath])
-                        lbl.setStyleSheet("background-color: #0A0A0A; border-radius: 6px;")
-                    else:
-                        # Safety fallback: Scale dynamically if the background thread has not loaded it yet
-                        pixmap = QPixmap(filepath)
-                        screen_size = self.parent().size() if self.parent() else QSize(800, 480)
-                        fallback_cell_size = QSize(screen_size.width() // 2 - 30, screen_size.height() // 2 - 50)
-                        
-                        scaled = pixmap.scaled(
-                            fallback_cell_size, 
-                            Qt.AspectRatioMode.KeepAspectRatio, 
-                            Qt.TransformationMode.SmoothTransformation
-                        )
-                        lbl.setPixmap(scaled)
-                        lbl.setStyleSheet("background-color: #0A0A0A; border-radius: 6px;")
+                    lbl.setText("⏳ Loading...")
+                    lbl.setStyleSheet("color: #555555; font-size: 13px; font-weight: bold; background-color: #0A0A0A; border-radius: 6px;")
                 
+                # Border Selection Hierarchy Matrix
                 if target_media_idx == self.global_index:
-                    frame.setStyleSheet("border: 3px solid #26D0CE; border-radius: 8px; padding: 1px;")
+                    # Currently Selected Media Frame
+                    if is_video:
+                        # Highlighted video item gets a distinct thick red outline
+                        frame.setStyleSheet("border: 4px solid #FF3B30; border-radius: 8px; padding: 0px;")
+                    else:
+                        # Highlighted image item
+                        frame.setStyleSheet("border: 4px solid #26D0CE; border-radius: 8px; padding: 0px;")
                 else:
-                    frame.setStyleSheet("border: 3px solid #151515; border-radius: 8px; padding: 1px;")
+                    # Unselected Media Frames
+                    if is_video:
+                        # Unselected videos keep a clean, thin red outline to maintain identity
+                        frame.setStyleSheet("border: 2px solid #991B1B; border-radius: 8px; padding: 2px;")
+                    else:
+                        # Standard idle images
+                        frame.setStyleSheet("border: 3px solid #151515; border-radius: 8px; padding: 1px;")
             else:
                 lbl.setPixmap(QPixmap())
                 lbl.setText("")
                 frame.setStyleSheet("border: 3px dashed #111111; border-radius: 8px; background-color: transparent;")
 
-    def mousePressEvent(self, event): pass
-    def mouseReleaseEvent(self, event): pass
+    def closeEvent(self, event):
+        self.stop_video_playback()
+        super().closeEvent(event)
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)

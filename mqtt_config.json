@@ -1,24 +1,14 @@
 {
-    "active_profile": "vhgj",
+    "active_profile": "DefaultProfile",
     "profiles": [
         {
             "network_name": "DefaultProfile",
-            "enabled": false,
-            "broker": "ttt",
-            "port": 1883,
-            "topic": "camera/commands",
-            "username": "eette",
-            "password": "etettee",
-            "client_id": "rpicam_client"
-        },
-        {
-            "network_name": "vhgj",
             "enabled": true,
-            "broker": "v cn",
+            "broker": "192.168.100.168",
             "port": 1883,
             "topic": "camera/commands",
             "username": "",
-            "password": "tjgjg",
+            "password": "",
             "client_id": ""
         }
     ]

@@ -119,7 +119,6 @@ class MainView(QWidget):
 
         self.mode_icon_btn.clicked.connect(self.toggle_mode_menu)
         
-        # Instantiate the slider programmatically to keep the camera zoom pipeline intact
         self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
         self.zoom_slider.setMinimum(10)
         self.zoom_slider.setMaximum(40)
@@ -246,10 +245,11 @@ class MainView(QWidget):
         shutter_controls.setSpacing(12)
         shutter_controls.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.camera_btn = QPushButton()
-        self._shadow(self.camera_btn)
+        # Single universal Shutter button replacing separate photo/video buttons
+        self.shutter_btn = QPushButton()
+        self._shadow(self.shutter_btn)
 
-        self.mode_switch_btn = QPushButton("PHOTO ⟷ VIDEO")
+        self.mode_switch_btn = QPushButton("TOGGLE MODE")
         self.mode_switch_btn.setFixedSize(110, 28)
         self.mode_switch_btn.setFont(QFont("Arial", 8, QFont.Weight.Bold))
         self.mode_switch_btn.setStyleSheet("""
@@ -261,12 +261,8 @@ class MainView(QWidget):
             QPushButton:pressed { background-color: rgba(40, 40, 40, 200); color: #FFFFFF; }
         """)
 
-        self.video_btn = QPushButton()
-        self._shadow(self.video_btn)
-
-        shutter_controls.addWidget(self.camera_btn)
+        shutter_controls.addWidget(self.shutter_btn)
         shutter_controls.addWidget(self.mode_switch_btn)
-        shutter_controls.addWidget(self.video_btn)
 
         bottom_hud_layout.addLayout(shutter_controls)
         bottom_hud_layout.addStretch(3)
@@ -457,17 +453,11 @@ class MainView(QWidget):
 
     def update_control_sizes(self, active_mode):
         if active_mode == "photo":
-            self.camera_btn.setFixedSize(54, 54)
-            self.camera_btn.setStyleSheet("background-color: #F0F0F0; border-radius: 27px; border: 4px solid #2A2A2A;")
-            
-            self.video_btn.setFixedSize(28, 28)
-            self.video_btn.setStyleSheet("background-color: #3A0000; border-radius: 14px; border: 2px solid #1A1A1A;")
+            self.shutter_btn.setFixedSize(54, 54)
+            self.shutter_btn.setStyleSheet("background-color: #F0F0F0; border-radius: 27px; border: 4px solid #2A2A2A;")
         elif active_mode == "video":
-            self.camera_btn.setFixedSize(28, 28)
-            self.camera_btn.setStyleSheet("background-color: #2A2A2A; border-radius: 14px; border: 2px solid #111111;")
-            
-            self.video_btn.setFixedSize(54, 54)
-            self.video_btn.setStyleSheet("background-color: #EE0022; border-radius: 27px; border: 4px solid #FFFFFF;")
+            self.shutter_btn.setFixedSize(54, 54)
+            self.shutter_btn.setStyleSheet("background-color: #EE0022; border-radius: 27px; border: 4px solid #FFFFFF;")
 
     def trigger_flash(self):
         self.flash_overlay = QWidget(self.feed_label)
