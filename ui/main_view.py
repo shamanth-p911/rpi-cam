@@ -10,7 +10,7 @@ class MqttSettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Network Profile Settings")
-        self.setFixedSize(400, 420) 
+        self.setFixedSize(400, 320) # Reduced height since fields were removed
         self.setStyleSheet("background-color: #1A1A1A; color: #FFFFFF; font-size: 14px;")
         
         self.delete_requested = False  
@@ -23,12 +23,8 @@ class MqttSettingsDialog(QDialog):
         self.broker_input = QLineEdit()
         self.port_input = QLineEdit()
         self.topic_input = QLineEdit()
-        self.user_input = QLineEdit()
-        self.pass_input = QLineEdit()
-        self.pass_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.client_id_input = QLineEdit()
         
-        for widget in [self.name_input, self.broker_input, self.port_input, self.topic_input, self.user_input, self.pass_input, self.client_id_input]:
+        for widget in [self.name_input, self.broker_input, self.port_input, self.topic_input]:
             widget.setStyleSheet("background-color: #0D0D0D; border: 1px solid #333; padding: 5px; border-radius: 4px; color: #FFFFFF;")
         
         form_layout.addRow("Network Name:", self.name_input)
@@ -36,9 +32,6 @@ class MqttSettingsDialog(QDialog):
         form_layout.addRow("Broker IP/Host:", self.broker_input)
         form_layout.addRow("Port:", self.port_input)
         form_layout.addRow("Subscribe Topic:", self.topic_input)
-        form_layout.addRow("Username (opt):", self.user_input)
-        form_layout.addRow("Password (opt):", self.pass_input)
-        form_layout.addRow("Client ID:", self.client_id_input)
         
         layout.addLayout(form_layout)
         
@@ -66,9 +59,6 @@ class MqttSettingsDialog(QDialog):
         self.broker_input.setText(config.get("broker", ""))
         self.port_input.setText(str(config.get("port", 1883)))
         self.topic_input.setText(config.get("topic", "camera/commands"))
-        self.user_input.setText(config.get("username", ""))
-        self.pass_input.setText(config.get("password", ""))
-        self.client_id_input.setText(config.get("client_id", "rpicam_client"))
         
         if is_editing:
             self.delete_btn.show()
@@ -85,9 +75,9 @@ class MqttSettingsDialog(QDialog):
             "broker": self.broker_input.text().strip(),
             "port": int(self.port_input.text().strip() or 1883),
             "topic": self.topic_input.text().strip(),
-            "username": self.user_input.text().strip(),
-            "password": self.pass_input.text().strip(),
-            "client_id": self.client_id_input.text().strip()
+            "username": "", # Kept for backend compatibility
+            "password": "", 
+            "client_id": "rpicam_client" 
         }
 
 
@@ -245,7 +235,6 @@ class MainView(QWidget):
         shutter_controls.setSpacing(12)
         shutter_controls.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Single universal Shutter button replacing separate photo/video buttons
         self.shutter_btn = QPushButton()
         self._shadow(self.shutter_btn)
 

@@ -1,9 +1,9 @@
-# mqtttest.py
+# test_mqtt_publisher.py
 import time
 import json
 import paho.mqtt.client as mqtt
 
-# --- Configuration (Points directly to your Raspberry Pi Broker Interface) ---
+# --- Configuration Points directly to your Raspberry Pi Broker Interface ---
 BROKER = "192.168.100.168"  
 PORT = 1883
 TOPIC = "camera/commands"
@@ -11,11 +11,10 @@ USERNAME = ""
 PASSWORD = ""         
 
 def on_connect(client, userdata, flags, rc, properties=None):
-    # Standard compatibility check for both Paho v1.x and v2.x connection outputs
     status_code = rc.value if hasattr(rc, 'value') else rc
     if status_code == 0:
         print("\n[TESTER] Successfully connected to MQTT Broker!")
-        print(f"[TESTER] Sending commands to broker IP: {BROKER} on topic: '{TOPIC}'")
+        print(f"[TESTER] Ready to dispatch commands on topic: '{TOPIC}'")
     else:
         print(f"\n[TESTER] Connection refused by broker. Status code: {status_code}")
 
@@ -28,23 +27,16 @@ except AttributeError:
     except AttributeError:
         client = mqtt.Client()
 
-# --- 2. Bind hooks ---
 if USERNAME:
     client.username_pw_set(USERNAME, PASSWORD)
 
 client.on_connect = on_connect
 
-# --- 3. Establish Persistent Thread Connection ---
 print(f"[TESTER] Connecting to broker service at {BROKER}:{PORT}...")
-try:
-    client.connect(BROKER, PORT, 60)
-except Exception as e:
-    print(f"\n[⚠️] Failed to even reach the broker: {e}")
-    print("Please make sure Mosquitto service is running on the Pi via: sudo systemctl start mosquitto")
-    exit(1)
+client.connect(BROKER, PORT, 60)
 
+# Start background network processing loops
 client.loop_start()
-time.sleep(0.5) # Brief pause to allow the handshake network stream to initialize
 
 try:
     while True:
@@ -84,4 +76,8 @@ try:
 finally:
     client.loop_stop()
     client.disconnect()
-    print("[TESTER] Disconnected.")
+    print("[TESTER] Clean teardown done.")
+
+
+
+    
